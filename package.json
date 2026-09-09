@@ -1,0 +1,16 @@
+{
+  "name": "explore-tavus",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Give an API key and a Bangla document, get a live Tavus video conversation about it.",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env talk.mjs",
+    "end": "node --env-file-if-exists=.env talk.mjs --end",
+    "faces": "node --env-file-if-exists=.env talk.mjs --faces",
+    "docs": "node --env-file-if-exists=.env talk.mjs --docs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

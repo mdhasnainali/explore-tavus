@@ -1,0 +1,4 @@
+.env
+node_modules/
+.tavus-session.json
+*.extracted.txt
