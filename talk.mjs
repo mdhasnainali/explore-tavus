@@ -13,6 +13,11 @@ import { stat, writeFile, readFile, unlink } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { Tavus, TavusError } from './lib/tavus.mjs';
 import { extractText } from './lib/extract.mjs';
+import {
+  fingerprint,
+  palNameWithFingerprint,
+  palNameHasFingerprint,
+} from './lib/fingerprint.mjs';
 
 const SESSION_FILE = new URL('./.tavus-session.json', import.meta.url);
 
@@ -49,6 +54,8 @@ function parseArgs(argv) {
     face: process.env.TAVUS_FACE_ID || null,
     stt: null,
     greeting: undefined,
+    pal: null,
+    fresh: false,
     maxDuration: 1800,
     keep: false,
     open: true,
@@ -66,12 +73,15 @@ function parseArgs(argv) {
     if (a === '--end') opts.mode = 'end';
     else if (a === '--faces') opts.mode = 'faces';
     else if (a === '--docs') opts.mode = 'docs';
+    else if (a === '--pals') opts.mode = 'pals';
     else if (a === '--lang') opts.lang = next().toLowerCase();
     else if (a === '--reply-lang') opts.replyLang = next();
     else if (a === '--face') opts.face = next();
     else if (a === '--stt') opts.stt = next();
     else if (a === '--greeting') opts.greeting = next();
     else if (a === '--no-greeting') opts.greeting = null;
+    else if (a === '--pal') opts.pal = next();
+    else if (a === '--fresh') opts.fresh = true;
     else if (a === '--max-duration') opts.maxDuration = Number(next());
     else if (a === '--keep') opts.keep = true;
     else if (a === '--no-open') opts.open = false;
@@ -101,6 +111,8 @@ Flags (put them after a bare --  when going through npm):
                        Bangla greeting. Write it in native script -- the TTS
                        reads the characters it is given.
   --no-greeting        Let Tavus pick its own opening line.
+  --pal <pal_id>       Reuse this exact PAL. Skips extraction entirely.
+  --fresh              Create a new PAL even if a matching one exists.
   --max-duration <s>   Hard call length cap in seconds. Default: 1800.
   --keep               Do not end the conversation on Ctrl-C.
   --no-open            Print the URL instead of opening a browser.
@@ -109,6 +121,7 @@ Other modes:
   npm run end          End every active conversation on the account.
   npm run faces        List faces available to your API key.
   npm run docs         List knowledge base documents.
+  npm run pals         List PALs this tool created, newest first.
 `.trim();
 
 // ---------------------------------------------------------------- helpers
@@ -189,6 +202,19 @@ async function modeDocs(tavus) {
   }
 }
 
+async function modePals(tavus) {
+  const list = await tavus.listAllPals();
+  if (!list.length) return console.log('No user-created PALs on this account.');
+
+  list.sort((a, b) => String(b.created_at ?? '').localeCompare(String(a.created_at ?? '')));
+
+  for (const p of list) {
+    const when = p.created_at ? p.created_at.slice(0, 16).replace('T', ' ') : '';
+    console.log(`${p.pal_id}  ${when}  ${p.pal_name ?? '(unnamed)'}`);
+  }
+  console.log(`\n${list.length} PAL(s). The trailing #hash is the config fingerprint.`);
+}
+
 async function modeEnd(tavus) {
   const res = await tavus.listConversations('active');
   const list = Array.isArray(res) ? res : (res.data ?? []);
@@ -205,6 +231,10 @@ async function modeEnd(tavus) {
 }
 
 async function modeTalk(tavus, opts) {
+  // --pal names an existing PAL, so its document is already baked in and
+  // there is nothing local to read.
+  if (opts.pal) return startCall(tavus, opts, { palId: opts.pal, label: opts.pal });
+
   if (!opts.source) {
     console.error('Need a document. Try: npm start ./mydoc.pdf\n');
     console.error(HELP);
@@ -276,8 +306,7 @@ async function modeTalk(tavus, opts) {
   const faceId = await resolveFaceId(tavus, opts.face);
   console.log(`face_id=${faceId}  language=${opts.lang}  stt=${stt}`);
 
-  const pal = await tavus.createPal({
-    pal_name: `Doc Agent - ${label}`.slice(0, 60),
+  const palPayload = {
     pipeline_mode: 'full',
     default_face_id: faceId,
     system_prompt: buildSystemPrompt(replyLang, viaKb),
@@ -292,8 +321,42 @@ async function modeTalk(tavus, opts) {
         pal_interruptibility: 'medium',
       },
     },
-  });
-  console.log(`pal_id=${pal.pal_id}`);
+  };
+
+  const hash = fingerprint(palPayload);
+  palPayload.pal_name = palNameWithFingerprint(`Doc Agent - ${label}`, hash);
+
+  let palId = null;
+
+  if (opts.fresh) {
+    console.log('--fresh set: creating a new PAL.');
+  } else {
+    // Any config change -- different document text, language, greeting, face,
+    // STT engine -- changes the hash, so a match means a byte-identical PAL.
+    const existing = (await tavus.listAllPals()).find((p) =>
+      palNameHasFingerprint(p.pal_name, hash),
+    );
+    if (existing) {
+      palId = existing.pal_id;
+      console.log(`reusing pal_id=${palId} (config unchanged)`);
+    }
+  }
+
+  if (!palId) {
+    const pal = await tavus.createPal(palPayload);
+    palId = pal.pal_id;
+    console.log(`created pal_id=${palId}`);
+  }
+
+  return startCall(tavus, opts, { palId, faceId, label, documentIds });
+}
+
+async function startCall(tavus, opts, { palId, faceId, label, documentIds = null }) {
+  // On the --pal path faceId arrives undefined. Leave it that way unless the
+  // user named one: per the Create Conversation docs, a face_id in the request
+  // overrides the PAL's own default_face_id, so filling in an arbitrary
+  // account face here would silently swap the PAL's intended appearance.
+  faceId ??= opts.face ?? null;
 
   // `undefined` means "no --greeting flag given", so fall back to the
   // language default. Explicit `null` from --no-greeting means send nothing.
@@ -303,8 +366,8 @@ async function modeTalk(tavus, opts) {
   if (greeting) console.log(`greeting: ${greeting}`);
 
   const convo = await tavus.createConversation({
-    pal_id: pal.pal_id,
-    face_id: faceId,
+    pal_id: palId,
+    ...(faceId ? { face_id: faceId } : {}),
     conversation_name: `Talk about ${label}`.slice(0, 60),
     ...(greeting ? { custom_greeting: greeting } : {}),
     properties: {
@@ -319,7 +382,7 @@ async function modeTalk(tavus, opts) {
     SESSION_FILE,
     JSON.stringify(
       {
-        pal_id: pal.pal_id,
+        pal_id: palId,
         conversation_id: convo.conversation_id,
         conversation_url: convo.conversation_url,
         document_ids: documentIds,
@@ -383,6 +446,7 @@ async function main() {
 
   if (opts.mode === 'faces') return modeFaces(tavus);
   if (opts.mode === 'docs') return modeDocs(tavus);
+  if (opts.mode === 'pals') return modePals(tavus);
   if (opts.mode === 'end') return modeEnd(tavus);
   return modeTalk(tavus, opts);
 }

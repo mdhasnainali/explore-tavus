@@ -32,6 +32,8 @@ npm start ./doc.pdf -- --reply-lang english  # you speak Bangla, it answers Engl
 npm start ./doc.pdf -- --greeting 'আসসালামু আলাইকুম!'   # custom opening line
 npm start ./doc.pdf -- --no-greeting         # let Tavus pick its own opener
 npm start ./doc.pdf -- --face r874cc5f8a3b   # pick a specific face
+npm start -- --pal pcb7a34da5fe              # reuse a PAL by id, skip the file
+npm start ./doc.pdf -- --fresh               # force a new PAL
 npm start ./doc.pdf -- --keep                # leave the call running after Ctrl-C
 npm start ./doc.pdf -- --no-open             # print the URL, don't open a browser
 ```
@@ -60,8 +62,35 @@ phonetics rather than Bengali. Defaults live in `GREETINGS` at the top of
 npm run end      # end every active conversation (stops billing)
 npm run faces    # list faces available to your key
 npm run docs     # list knowledge base documents
+npm run pals     # list PALs this tool created, newest first
 npm start -- --help
 ```
+
+## PAL reuse
+
+Runs do not pile up duplicate PALs. Before creating one, the tool hashes the
+PAL payload and looks for a PAL on your account whose name carries that hash:
+
+```
+Doc Agent - bangladesh.md #a3f91c04e7b2
+                          ^^^^^^^^^^^^^ config fingerprint
+```
+
+Same config → reuse. Anything that changes the PAL — document text, language,
+system prompt, face, STT engine — changes the hash and gets a new PAL.
+
+The fingerprint lives in the PAL name on Tavus rather than in a local cache
+file, so reuse survives a fresh clone or a second machine, and a PAL deleted
+from the portal is simply recreated. Your account is the source of truth.
+
+`--fresh` creates a new PAL regardless. `--pal <id>` reuses one directly and
+skips reading the file at all — fastest way back into a document you have
+already loaded once.
+
+Two things are **conversation** settings, not PAL settings, so changing them
+reuses the same PAL: `--greeting` (`custom_greeting`) and `--max-duration`.
+`--lang` does change the PAL, since it drives both the STT engine and the
+system prompt.
 
 ## The two paths, and why
 
@@ -91,9 +120,10 @@ Bengali is one of Tavus's 43 languages, and the tool selects the
 ## Files
 
 ```
-talk.mjs           CLI and orchestration
-lib/tavus.mjs      Tavus REST client (fetch, no deps)
-lib/extract.mjs    local document -> plain text
+talk.mjs             CLI and orchestration
+lib/tavus.mjs        Tavus REST client (fetch, no deps)
+lib/extract.mjs      local document -> plain text
+lib/fingerprint.mjs  PAL config hashing for reuse
 ```
 
 Extraction shells out to `pdftotext` (poppler) for PDFs and `soffice`
