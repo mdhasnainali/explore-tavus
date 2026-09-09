@@ -22,6 +22,23 @@ const MAX_CONTEXT_CHARS = 60_000;
 
 const FALLBACK_FACE_ID = 'r90bbd427f71';
 
+// Spoken by the PAL the moment a participant joins, before it listens.
+// Per the Tavus changelog, custom greetings are non-interruptible: the PAL
+// finishes the whole line before it starts hearing the user.
+//
+// These are written in native script on purpose. The TTS engine pronounces
+// the characters it is given, so romanized Bangla ("Kamon achen") comes out
+// as mangled English phonetics rather than Bengali.
+const GREETINGS = {
+  bengali:
+    'হ্যালো, কেমন আছেন? আমি বাংলাদেশ সম্পর্কে জানি। আপনি বাংলাদেশ সম্পর্কে কী জানতে চান?',
+  english:
+    'Hello, how are you? I know about Bangladesh. What would you like to know about it?',
+};
+
+// "multilingual" opens in Bangla, then follows whatever the user speaks.
+GREETINGS.multilingual = GREETINGS.bengali;
+
 // ---------------------------------------------------------------- args
 
 function parseArgs(argv) {
@@ -31,6 +48,7 @@ function parseArgs(argv) {
     replyLang: null,
     face: process.env.TAVUS_FACE_ID || null,
     stt: null,
+    greeting: undefined,
     maxDuration: 1800,
     keep: false,
     open: true,
@@ -52,6 +70,8 @@ function parseArgs(argv) {
     else if (a === '--reply-lang') opts.replyLang = next();
     else if (a === '--face') opts.face = next();
     else if (a === '--stt') opts.stt = next();
+    else if (a === '--greeting') opts.greeting = next();
+    else if (a === '--no-greeting') opts.greeting = null;
     else if (a === '--max-duration') opts.maxDuration = Number(next());
     else if (a === '--keep') opts.keep = true;
     else if (a === '--no-open') opts.open = false;
@@ -77,6 +97,10 @@ Flags (put them after a bare --  when going through npm):
   --face <face_id>     Face to use. Default: first face on your account.
   --stt <engine>       STT engine. Default: tavus-soniox for Indic languages,
                        tavus-auto otherwise.
+  --greeting <text>    Opening line the agent speaks on join. Defaults to a
+                       Bangla greeting. Write it in native script -- the TTS
+                       reads the characters it is given.
+  --no-greeting        Let Tavus pick its own opening line.
   --max-duration <s>   Hard call length cap in seconds. Default: 1800.
   --keep               Do not end the conversation on Ctrl-C.
   --no-open            Print the URL instead of opening a browser.
@@ -271,10 +295,18 @@ async function modeTalk(tavus, opts) {
   });
   console.log(`pal_id=${pal.pal_id}`);
 
+  // `undefined` means "no --greeting flag given", so fall back to the
+  // language default. Explicit `null` from --no-greeting means send nothing.
+  const greeting =
+    opts.greeting === undefined ? (GREETINGS[opts.lang] ?? null) : opts.greeting;
+
+  if (greeting) console.log(`greeting: ${greeting}`);
+
   const convo = await tavus.createConversation({
     pal_id: pal.pal_id,
     face_id: faceId,
     conversation_name: `Talk about ${label}`.slice(0, 60),
+    ...(greeting ? { custom_greeting: greeting } : {}),
     properties: {
       language: opts.lang,
       max_call_duration: opts.maxDuration,

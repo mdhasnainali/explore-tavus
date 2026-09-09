@@ -29,10 +29,30 @@ Flags go after a bare `--` when running through npm:
 ```bash
 npm start ./doc.pdf -- --lang multilingual   # auto-detect Bangla/English
 npm start ./doc.pdf -- --reply-lang english  # you speak Bangla, it answers English
+npm start ./doc.pdf -- --greeting 'আসসালামু আলাইকুম!'   # custom opening line
+npm start ./doc.pdf -- --no-greeting         # let Tavus pick its own opener
 npm start ./doc.pdf -- --face r874cc5f8a3b   # pick a specific face
 npm start ./doc.pdf -- --keep                # leave the call running after Ctrl-C
 npm start ./doc.pdf -- --no-open             # print the URL, don't open a browser
 ```
+
+## The greeting
+
+The agent speaks first. Default opener in Bangla:
+
+> হ্যালো, কেমন আছেন? আমি বাংলাদেশ সম্পর্কে জানি। আপনি বাংলাদেশ সম্পর্কে কী জানতে চান?
+>
+> *(Hello, how are you? I know about Bangladesh. What would you like to know
+> about it?)*
+
+Sent as `custom_greeting` on `POST /v2/conversations`. Per the Tavus changelog
+these are **non-interruptible** — the agent finishes the whole line before it
+starts listening, so it never gets cut off mid-sentence.
+
+Write greetings in **native script**, not romanized. TTS pronounces the
+characters it is handed, so `"Kamon achen"` comes out as mangled English
+phonetics rather than Bengali. Defaults live in `GREETINGS` at the top of
+`talk.mjs`; `--greeting` overrides per-call, `--no-greeting` sends none.
 
 ## Other commands
 
